@@ -1,0 +1,37 @@
+{
+  "name": "whitebot",
+  "version": "1.2.0",
+  "description": "WhatsApp multi-session bot — ready to rent",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "dev": "node src/main.js",
+    "postinstall": "node -e \"console.log('✅ WhiteBot ready – run npm start')\""
+  },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "baileys",
+    "multi-session",
+    "whitebot",
+    "rent-bot"
+  ],
+  "author": "WhiteBot <hachimanryuu@gmail.com>",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "axios": "^1.13.2",
+    "better-sqlite3": "^12.5.0",
+    "chalk": "^4.1.2",
+    "dotenv": "^17.2.3",
+    "form-data": "^4.0.5",
+    "fs-extra": "^11.3.2",
+    "mime-types": "^3.0.2",
+    "node-fetch": "^3.3.2",
+    "pino": "^10.1.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
