@@ -10,6 +10,10 @@ sessions/**
 db/
 db/**
 
+# === Temp / runtime files ===
+src/tmp/
+src/tmp/**
+
 # === Logs ===
 logs/
 logs/**
