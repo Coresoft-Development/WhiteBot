@@ -1,0 +1,25 @@
+# === WhatsApp / Baileys Session ===
+sessions/
+sessions/**
+
+# === Environment & Secrets ===
+.env
+*.env
+
+# === Database / Local Data ===
+db/
+db/**
+
+# === Logs ===
+logs/
+logs/**
+
+# === Media (runtime generated) ===
+media/
+media/**
+
+# === Node.js ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
