@@ -1,6 +1,6 @@
 {
   "name": "whitebot",
-  "version": "1.2.0",
+  "version": "1.0.0",
   "description": "WhatsApp multi-session bot — ready to rent",
   "main": "src/main.js",
   "scripts": {
@@ -26,12 +26,16 @@
     "axios": "^1.13.2",
     "better-sqlite3": "^12.5.0",
     "chalk": "^4.1.2",
+    "cheerio": "^1.1.2",
     "dotenv": "^17.2.3",
+    "fluent-ffmpeg": "^2.1.3",
     "form-data": "^4.0.5",
     "fs-extra": "^11.3.2",
     "mime-types": "^3.0.2",
-    "node-fetch": "^3.3.2",
+    "node-fetch": "^2.7.0",
     "pino": "^10.1.0",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode-terminal": "^0.12.0",
+    "sharp": "^0.32.6",
+    "wa-sticker-formatter": "^4.4.4"
   }
 }

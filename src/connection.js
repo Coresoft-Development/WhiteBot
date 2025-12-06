@@ -1,20 +1,22 @@
 /**
- * WhiteBot Connection  ✅ v1.2.0  |  MAX-UPDATE
- * - auto hapus folder 401 + QR baru tanpa sentuh
- * - keep-alive + reconnect exponential back-off
- * - logger detail + warna
- * - support callback onAuthFail untuk SessionManager
+ * WhiteBot Connection  ✅ v1.3.0-token
+ * - auto hapus 401 + QR baru
+ * - auth token (login) + owner by-pass
+ * - skip channel/broadcast/lid
+ * - reconnect & keep-alive
  */
-const makeWASocket = require('@whiskeysockets/baileys').default;
-const { useMultiFileAuthState } = require('@whiskeysockets/baileys');
-const qrcode = require('qrcode-terminal');
-const pino = require('pino');
-const path = require('path');
-const fs = require('fs-extra');
-const chalk = require('chalk');
-const handleCommand = require('./commandHandler');
-const { log } = require('./utils');
-const stats = require('./lib/stats');
+const makeWASocket = require("@whiskeysockets/baileys").default;
+const { useMultiFileAuthState } = require("@whiskeysockets/baileys");
+const qrcode = require("qrcode-terminal");
+const pino = require("pino");
+const path = require("path");
+const fs = require("fs-extra");
+const chalk = require("chalk");
+const handleCommand = require("./commandHandler");
+const { log } = require("./utils");
+const stats = require("./lib/stats");
+const tokenAuth = require("./lib/tokenAuth"); 
+
 
 class Connection {
   constructor({ name, sessionsDir, db, onAuthFail }) {
@@ -22,112 +24,153 @@ class Connection {
     this.sessionsDir = sessionsDir;
     this.db = db;
     this.sock = null;
-    this.onAuthFail = onAuthFail;   // callback ke SessionManager
-    this.reconnectDelay = 3000;     // back-off awal
-    this.maxReconnect = 10;         // limit agar tidak infinite
-    this.attempt = 0;               // counter reconnect
+    this.onAuthFail = onAuthFail;
+    this.reconnectDelay = 3000;
+    this.maxReconnect = 10;
+    this.attempt = 0;
   }
 
-  /* ----------------------------------------------------------
-   * 1. START / RESTART
-   * ---------------------------------------------------------- */
   async start() {
     const authFolder = path.join(this.sessionsDir, this.name);
     await fs.ensureDir(authFolder);
-
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
     this.sock = makeWASocket({
       auth: state,
-      logger: pino({ level: 'silent' }),
+      logger: pino({ level: "silent" }),
       printQRInTerminal: false,
-      // optional: agar reconnect lebih cepat
       connectTimeoutMs: 60_000,
-      keepAliveIntervalMs: 30_000
+      keepAliveIntervalMs: 30_000,
     });
 
-    this.sock.ev.on('creds.update', saveCreds);
+    this.sock.ev.on("creds.update", saveCreds);
 
-    this.sock.ev.on('connection.update', (update) => {
+    this.sock.ev.on("connection.update", (update) => {
       const { connection, lastDisconnect, qr } = update;
-
       if (qr) {
         log(chalk.cyan(`📱  QR untuk "${this.name}":`));
         qrcode.generate(qr, { small: true });
       }
-
-      if (connection === 'open') {
-        this.attempt = 0; // reset counter
+      if (connection === "open") {
+        this.attempt = 0;
         log(chalk.green(`✅  "${this.name}" berhasil tersambung!`));
       }
-
-      if (connection === 'close') {
+      if (connection === "close") {
         const status = lastDisconnect?.error?.output?.statusCode;
-        const shouldReconnect = status !== 401;
-
         if (status === 401) {
-          log(chalk.red(`❌  "${this.name}" auth gagal (401) – auto-hapus & restart.`));
+          log(
+            chalk.red(
+              `❌  "${this.name}" auth gagal (401) – auto-hapus & restart.`
+            )
+          );
           if (this.onAuthFail) this.onAuthFail(this.name);
-          return; // stop, sudah di-handle dari luar
-        }
-
-        if (this.attempt >= this.maxReconnect) {
-          log(chalk.red(`⛔  "${this.name}" sudah ${this.attempt}x reconnect – berhenti.`));
           return;
         }
-
+        if (this.attempt >= this.maxReconnect) {
+          log(
+            chalk.red(
+              `⛔  "${this.name}" sudah ${this.attempt}x reconnect – berhenti.`
+            )
+          );
+          return;
+        }
         this.attempt++;
-        const delay = Math.min(this.reconnectDelay * this.attempt, 30_000); // max 30 detik
-        log(chalk.yellow(`🔄  "${this.name}" reconnect ke-${this.attempt} dalam ${delay}ms...`));
+        const delay = Math.min(this.reconnectDelay * this.attempt, 30_000);
+        log(
+          chalk.yellow(
+            `🔄  "${this.name}" reconnect ke-${this.attempt} dalam ${delay}ms...`
+          )
+        );
         setTimeout(() => this.start(), delay);
       }
     });
 
-    /* ------------------------------------------------------
-     * 2. MESSAGE HANDLER
-     * ------------------------------------------------------ */
-       this.sock.ev.on('messages.upsert', async ({ messages }) => {
-     for (const m of messages) {
-       if (!m.message) continue;
+    /* ---------- 2. MESSAGE HANDLER (BALAS SEMUA DULU) ---------- */
+/* ---------- 2. MESSAGE HANDLER (SEMUA JID BOLEH) ---------- */
+this.sock.ev.on('messages.upsert', async ({ messages }) => {
+  for (const m of messages) {
+    try {
+      if (!m.message) continue;
 
-       const text = m.message.conversation || m.message.extendedTextMessage?.text || '';
-       const jid  = m.key.remoteJid;
-       const fromMe = m.key.fromMe;
+      const jid    = m.key.remoteJid;
+      const fromMe = m.key.fromMe;
+      const text   =
+        m.message.conversation ||
+        m.message.extendedTextMessage?.text ||
+        '';
 
-       /* ⬅️ counter statistik */
-       if (!fromMe) {
-         stats.hitMsg();
-         stats.addUser(jid);
-       }
+      /* 1. LOG (biar tahu masuk) */
+      console.log(
+        chalk.yellow(`[RAW] ${jid} | me:${fromMe} | "${text}"`)
+      );
 
-       // auto-register user baru (kode lama kamu)
-       if (!fromMe) this.db.addUser(jid);
+      /* 2. STATS */
+      if (!fromMe) {
+        stats.hitMsg();
+        stats.addUser(jid);
+        this.db.addUser(jid);
+      }
 
-       console.log(chalk.gray(`[MSG] ${jid} | me:${fromMe} | "${text}"`));
-       this.db.saveMessage(jid, fromMe ? 1 : 0, text);
+      /* 3. OWNER LOGIN */
+      // if (!fromMe && text.startsWith('.ownerlogin')) {
+      //   const args = text.trim().split(' ');
+      //   const email = args[1];
+      //   const pass  = args[2];
 
-       await handleCommand({ connection: this, message: m, jid, text, fromMe, db: this.db });
-     }
-   });
+      //   if (!email || !pass) {
+      //     await this.sock.sendMessage(jid, {
+      //       text: '❗ Contoh penggunaan:\n.ownerlogin ryuudev.new@gmail.com 12345678'
+      //     });
+      //     continue;
+      //   }
 
-    /* ------------------------------------------------------
-     * 3. ERROR GLOBAL (agar Node tidak exit)
-     * ------------------------------------------------------ */
-    process.on('uncaughtException', err => log('Uncaught: ' + err));
-    process.on('unhandledRejection', err => log('Unhandled: ' + err));
+      //   const success = ownerAuth.login(email, pass);
+
+      //   if (success) {
+      //     await this.sock.sendMessage(jid, {
+      //       text: '✅ Owner login berhasil!\nSekarang kamu bisa pakai *.gettoken* untuk membuat token user.'
+      //     });
+      //   } else {
+      //     await this.sock.sendMessage(jid, {
+      //       text: '❌ Email atau password salah.'
+      //     });
+      //   }
+
+      //   continue;
+      // }
+
+      /* 4. KIRIM KE COMMAND HANDLER (TANPA FILTER JID) */
+      await handleCommand({
+        connection: this,
+        message: m,
+        jid,
+        text,
+        fromMe,
+        db: this.db
+      });
+
+    } catch (err) {
+      console.error(
+        chalk.red('[MESSAGE HANDLER ERROR]'),
+        err
+      );
+    }
+  }
+});
+
+
+    /* ---------- 3. GLOBAL ERROR ---------- */
+    process.on("uncaughtException", (err) => log("Uncaught: " + err));
+    process.on("unhandledRejection", (err) => log("Unhandled: " + err));
   }
 
-  /* ----------------------------------------------------------
-   * 4. KIRIM PESAN (wrapper agar konsisten)
-   * ---------------------------------------------------------- */
+  /* ---------- 4. WRAPPER KIRIM PESAN ---------- */
   async sendMessage(jid, message) {
-    if (!this.sock) throw new Error('Socket belum ready');
+    if (!this.sock) throw new Error("Socket belum ready");
     return await this.sock.sendMessage(jid, message);
   }
 
-  /* ----------------------------------------------------------
-   * 5. GRACEFUL CLOSE (dipanggil saat delete session)
-   * ---------------------------------------------------------- */
+  /* ---------- 5. GRACEFUL CLOSE ---------- */
   close() {
     if (this.sock) this.sock.end();
   }
