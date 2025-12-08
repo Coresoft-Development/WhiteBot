@@ -5,16 +5,16 @@
  * - support multiple parallel session
  * - logger detail + warna
  */
-const fs   = require('fs-extra');
-const path = require('path');
-const chalk= require('chalk');          // warna di console
-const Connection = require('./connection');
+const fs = require("fs-extra");
+const path = require("path");
+const chalk = require("chalk"); // warna di console
+const Connection = require("./connection");
 
 class SessionManager {
   constructor({ sessionsDir, db }) {
     this.sessionsDir = sessionsDir;
     this.db = db;
-    this.sessions = new Map();          // name → Connection instance
+    this.sessions = new Map(); // name → Connection instance
 
     // langsung start saat instan
     this.init();
@@ -25,22 +25,25 @@ class SessionManager {
    * ---------------------------------------------------------- */
   async init() {
     await this.scanAndStartAll();
-    if (this.sessions.size === 0) await this.createSession('default');
+    if (this.sessions.size === 0) await this.createSession("default");
   }
 
   /* ----------------------------------------------------------
    * 2. SCAN SEMUA FOLDER → START CONNECTION
    * ---------------------------------------------------------- */
   async scanAndStartAll() {
-    const dirs = fs.readdirSync(this.sessionsDir)
-                   .filter(f => fs.statSync(path.join(this.sessionsDir, f)).isDirectory());
+    const dirs = fs
+      .readdirSync(this.sessionsDir)
+      .filter((f) => fs.statSync(path.join(this.sessionsDir, f)).isDirectory());
 
     if (!dirs.length) {
-      console.log(chalk.yellow('🟡  Belum ada session di disk.'));
+      console.log(chalk.yellow("🟡  Belum ada session di disk."));
       return;
     }
 
-    console.log(chalk.cyan(`📂  Ditemukan ${dirs.length} session, sedang menyambung...`));
+    console.log(
+      chalk.cyan(`📂  Ditemukan ${dirs.length} session, sedang menyambung...`)
+    );
     for (const d of dirs) await this.createSession(d);
   }
 
@@ -57,7 +60,7 @@ class SessionManager {
       name,
       sessionsDir: this.sessionsDir,
       db: this.db,
-      onAuthFail: () => this.handleAuthFail(name)   // callback 401
+      onAuthFail: () => this.handleAuthFail(name), // callback 401
     });
     this.sessions.set(name, conn);
     await conn.start();
@@ -70,7 +73,7 @@ class SessionManager {
     if (!this.sessions.has(name)) return;
     console.log(chalk.red(`🗑️  Menghapus session "${name}"...`));
     const conn = this.sessions.get(name);
-    if (conn.sock) conn.sock.end();          // graceful close
+    if (conn.sock) conn.sock.end(); // graceful close
     this.sessions.delete(name);
 
     // hapus folder auth
@@ -79,16 +82,24 @@ class SessionManager {
   }
 
   handleAuthFail(name) {
-    console.log(chalk.red(`❌  Auth 401 pada "${name}" -> auto-delete & restart.`));
+    console.log(
+      chalk.red(`❌  Auth 401 pada "${name}" -> auto-delete & restart.`)
+    );
     this.deleteSession(name).then(() => this.createSession(name));
   }
 
   /* ----------------------------------------------------------
    * 5. UTILITAS OWNER (opsional untuk sewa)
    * ---------------------------------------------------------- */
-  list() { return [...this.sessions.keys()]; }
-  isOnline(name) { return this.sessions.has(name); }
-  size() { return this.sessions.size; }
+  list() {
+    return [...this.sessions.keys()];
+  }
+  isOnline(name) {
+    return this.sessions.has(name);
+  }
+  size() {
+    return this.sessions.size;
+  }
 }
 
 module.exports = SessionManager;

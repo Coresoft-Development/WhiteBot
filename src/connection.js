@@ -15,8 +15,7 @@ const chalk = require("chalk");
 const handleCommand = require("./commandHandler");
 const { log } = require("./utils");
 const stats = require("./lib/stats");
-const tokenAuth = require("./lib/tokenAuth"); 
-
+const tokenAuth = require("./lib/tokenAuth");
 
 class Connection {
   constructor({ name, sessionsDir, db, onAuthFail }) {
@@ -85,85 +84,60 @@ class Connection {
       }
     });
 
-    /* ---------- 2. MESSAGE HANDLER (BALAS SEMUA DULU) ---------- */
-/* ---------- 2. MESSAGE HANDLER (SEMUA JID BOLEH) ---------- */
-this.sock.ev.on('messages.upsert', async ({ messages }) => {
-  for (const m of messages) {
-    try {
-      if (!m.message) continue;
+    this.sock.ev.on("messages.upsert", async ({ messages }) => {
+      for (const m of messages) {
+        try {
+          if (!m.message) continue;
 
-      const jid    = m.key.remoteJid;
-      const fromMe = m.key.fromMe;
-      const text   =
-        m.message.conversation ||
-        m.message.extendedTextMessage?.text ||
-        '';
+          const jid = m.key.remoteJid;
+          const fromMe = m.key.fromMe;
+          const text =
+            m.message.conversation || m.message.extendedTextMessage?.text || "";
 
-      /* 1. LOG (biar tahu masuk) */
-      console.log(
-        chalk.yellow(`[RAW] ${jid} | me:${fromMe} | "${text}"`)
-      );
+          /* 1. LOG */
+          console.log(chalk.yellow(`[RAW] ${jid} | me:${fromMe} | "${text}"`));
 
-      /* 2. STATS */
-      if (!fromMe) {
-        stats.hitMsg();
-        stats.addUser(jid);
-        this.db.addUser(jid);
+          /* 2. STATS */
+          if (!fromMe) {
+            stats.hitMsg();
+            stats.addUser(jid);
+            this.db.addUser(jid);
+          }
+
+          /* 3. FILTER – hanya merespon jika:
+         - chat pribadi, atau
+         - di grup tapi pakai prefix "." atau di-mention bot
+      */
+          const isGroup = jid.endsWith("@g.us");
+          const botNumber =
+            this.sock.user.id.replace(/:.+/, "") + "@s.whatsapp.net"; // normalize
+          const isMentioned =
+            m.message.extendedTextMessage?.contextInfo?.mentionedJid?.includes(
+              botNumber
+            ) || false;
+          const startsWithPrefix = text.startsWith(".");
+
+          if (isGroup && !startsWithPrefix && !isMentioned) continue;
+
+          /* 4. LANJUT KE COMMAND HANDLER */
+          await handleCommand({
+            connection: this,
+            message: m,
+            jid,
+            text,
+            fromMe,
+            db: this.db,
+          });
+        } catch (err) {
+          console.error(chalk.red("[MESSAGE HANDLER ERROR]"), err);
+        }
       }
+    });
 
-      /* 3. OWNER LOGIN */
-      // if (!fromMe && text.startsWith('.ownerlogin')) {
-      //   const args = text.trim().split(' ');
-      //   const email = args[1];
-      //   const pass  = args[2];
-
-      //   if (!email || !pass) {
-      //     await this.sock.sendMessage(jid, {
-      //       text: '❗ Contoh penggunaan:\n.ownerlogin ryuudev.new@gmail.com 12345678'
-      //     });
-      //     continue;
-      //   }
-
-      //   const success = ownerAuth.login(email, pass);
-
-      //   if (success) {
-      //     await this.sock.sendMessage(jid, {
-      //       text: '✅ Owner login berhasil!\nSekarang kamu bisa pakai *.gettoken* untuk membuat token user.'
-      //     });
-      //   } else {
-      //     await this.sock.sendMessage(jid, {
-      //       text: '❌ Email atau password salah.'
-      //     });
-      //   }
-
-      //   continue;
-      // }
-
-      /* 4. KIRIM KE COMMAND HANDLER (TANPA FILTER JID) */
-      await handleCommand({
-        connection: this,
-        message: m,
-        jid,
-        text,
-        fromMe,
-        db: this.db
-      });
-
-    } catch (err) {
-      console.error(
-        chalk.red('[MESSAGE HANDLER ERROR]'),
-        err
-      );
-    }
-  }
-});
-
-
-    /* ---------- 3. GLOBAL ERROR ---------- */
+    /* tetap sama */
     process.on("uncaughtException", (err) => log("Uncaught: " + err));
     process.on("unhandledRejection", (err) => log("Unhandled: " + err));
   }
-
   /* ---------- 4. WRAPPER KIRIM PESAN ---------- */
   async sendMessage(jid, message) {
     if (!this.sock) throw new Error("Socket belum ready");
