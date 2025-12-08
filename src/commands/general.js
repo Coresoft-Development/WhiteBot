@@ -420,108 +420,6 @@ Ketik command di atas untuk mencoba fitur WhiteBot.`;
     }
   },
 
-  // addreply: async (ctx) => {
-  //   const { connection, jid, text } = ctx;
-  //   if (!text.includes("|"))
-  //     return await connection.sendMessage(jid, {
-  //       text: "❗ Gunakan: .addreply keyword|jawaban",
-  //     });
-  //   const [kw, ...ansArr] = text.slice(10).split("|");
-  //   const answer = ansArr.join("|").trim();
-  //   if (!kw || !answer)
-  //     return await connection.sendMessage(jid, {
-  //       text: "❗ Gunakan: .addreply halo|Halo juga!",
-  //     });
-  //   autoReplyDB.set(kw.trim().toLowerCase(), answer);
-  //   await connection.sendMessage(
-  //     jid,
-  //     {
-  //       text: `✅ Auto reply ditambah:\nKeyword: *${kw.trim()}*\nJawaban: *${answer}*`,
-  //     },
-  //     { quoted: ctx.m }
-  //   );
-  // },
-
-  // delreply: async (ctx) => {
-  //   const { connection, jid, text } = ctx;
-  //   const kw = text.slice(10).trim().toLowerCase();
-  //   if (!kw)
-  //     return await connection.sendMessage(jid, {
-  //       text: "❗ Gunakan: .delreply keyword",
-  //     });
-  //   if (autoReplyDB.delete(kw)) {
-  //     await connection.sendMessage(
-  //       jid,
-  //       { text: `✅ Keyword *${kw}* dihapus.` },
-  //       { quoted: ctx.m }
-  //     );
-  //   } else {
-  //     await connection.sendMessage(
-  //       jid,
-  //       { text: `❓ Keyword *${kw}* tidak ditemukan.` },
-  //       { quoted: ctx.m }
-  //     );
-  //   }
-  // },
-
-  // myreplyadd: async (ctx) => {
-  //   const { connection, jid, text, sender } = ctx;
-  //   if (!userSession.has(sender))
-  //     return await connection.sendMessage(jid, {
-  //       text: "❗ Kamu belum login!",
-  //     });
-  //   if (!text.includes("|"))
-  //     return await connection.sendMessage(jid, {
-  //       text: "❗ Gunakan: .myreplyadd keyword|jawaban",
-  //     });
-  //   const [kw, ...ansArr] = text.slice(13).split("|");
-  //   const answer = ansArr.join("|").trim();
-  //   if (!kw || !answer)
-  //     return await connection.sendMessage(jid, {
-  //       text: "❗ Gunakan: .myreplyadd halo|Halo pribadi!",
-  //     });
-  //   let map = autoReplyPerUser.get(sender);
-  //   if (!map) {
-  //     map = new Map();
-  //     autoReplyPerUser.set(sender, map);
-  //   }
-  //   map.set(kw.trim().toLowerCase(), answer);
-  //   await connection.sendMessage(
-  //     jid,
-  //     {
-  //       text: `✅ Auto reply pribadi ditambah:\nKeyword: *${kw.trim()}*\nJawaban: *${answer}*`,
-  //     },
-  //     { quoted: ctx.m }
-  //   );
-  // },
-
-  // myreplydel: async (ctx) => {
-  //   const { connection, jid, text, sender } = ctx;
-  //   if (!userSession.has(sender))
-  //     return await connection.sendMessage(jid, {
-  //       text: "❗ Kamu belum login!",
-  //     });
-  //   const kw = text.slice(15).trim().toLowerCase();
-  //   if (!kw)
-  //     return await connection.sendMessage(jid, {
-  //       text: "❗ Gunakan: .myreplydel keyword",
-  //     });
-  //   const map = autoReplyPerUser.get(sender);
-  //   if (map && map.delete(kw)) {
-  //     await connection.sendMessage(
-  //       jid,
-  //       { text: `✅ Keyword pribadi *${kw}* dihapus.` },
-  //       { quoted: ctx.m }
-  //     );
-  //   } else {
-  //     await connection.sendMessage(
-  //       jid,
-  //       { text: `❓ Keyword pribadi *${kw}* tidak ditemukan.` },
-  //       { quoted: ctx.m }
-  //     );
-  //   }
-  // },
-
   tagall: async (ctx) => {
     const { connection, jid, m, text } = ctx;
     const realJid = realNumber(jid, m.key.participant);
@@ -637,104 +535,6 @@ Ketik command di atas untuk mencoba fitur WhiteBot.`;
       .join("\n");
     const msg = `*📜 Daftar Fitur WhiteBot*\n\n${lines}\n\n💡 *Cara pakai:*\nUser wajib login dulu → .login <token>\nOwner → .ownerlogin\n\n*Login wajib setiap restart bot.*`;
     await connection.sendMessage(jid, { text: msg });
-  },
-
-  kick: async (ctx) => {
-    const { connection, jid, m, text, sock } = ctx; // <-- ambil sock langsung
-    const realJid = realNumber(jid, m.key.participant);
-
-    // 1. harus login
-    if (!userSession.has(realJid) && !ownerSession.has(realJid))
-      return await connection.sendMessage(
-        jid,
-        { text: "❗ Kamu belum login!" },
-        { quoted: m }
-      );
-
-    // 2. cek target
-    const num = text.trim().split(" ")[1];
-    if (!num)
-      return await connection.sendMessage(
-        jid,
-        { text: "❗ Gunakan: .kick @tag / nomor" },
-        { quoted: m }
-      );
-
-    const target = num.replace(/[^\d]/g, "").slice(-12) + "@s.whatsapp.net";
-
-    // 3. cek sock ada
-    if (typeof sock?.groupParticipantsUpdate !== "function")
-      return await connection.sendMessage(
-        jid,
-        { text: "❌ Socket tidak support kick." },
-        { quoted: m }
-      );
-
-    // 4. cek target ada di grup (supaya 500 tidak muncul)
-    try {
-      const meta = await sock.groupGetMetadata(jid);
-      if (!Object.keys(meta.participants).includes(target))
-        return await connection.sendMessage(
-          jid,
-          { text: "❌ Target tidak ditemukan di grup." },
-          { quoted: m }
-        );
-    } catch {
-      return await connection.sendMessage(
-        jid,
-        { text: "❌ Gagal cek anggota grup." },
-        { quoted: m }
-      );
-    }
-
-    // 5. kick dengan status detail
-    try {
-      const result = await sock.groupParticipantsUpdate(
-        jid,
-        [target],
-        "remove"
-      );
-      const status = result[0]?.status;
-
-      if (status === 200) {
-        await connection.sendMessage(
-          jid,
-          {
-            text: `✅ @${target.split("@")[0]} telah dikick.`,
-            mentions: [target],
-          },
-          { quoted: m }
-        );
-      } else if (status === 404) {
-        await connection.sendMessage(
-          jid,
-          { text: "❌ Target tidak ditemukan." },
-          { quoted: m }
-        );
-      } else if (status === 403) {
-        await connection.sendMessage(
-          jid,
-          { text: "❌ Bot bukan admin / target adalah admin." },
-          { quoted: m }
-        );
-      } else {
-        await connection.sendMessage(
-          jid,
-          { text: `❌ Kick gagal (status ${status}).` },
-          { quoted: m }
-        );
-      }
-    } catch (e) {
-      const code = e.data || e.statusCode || "???";
-      console.log("[KICK SERVER ERROR]", code, e.message);
-      await connection.sendMessage(
-        jid,
-        {
-          text: `❌ Server menolak kick (kode ${code}).\nPastikan target *ada di grup* dan *bukan admin*.`,
-        },
-        { quoted: m }
-      );
-    }
   },
 
   osint: async (ctx) => {
@@ -932,19 +732,6 @@ Ketik command di atas untuk mencoba fitur WhiteBot.`;
     await connection.sendMessage(jid, { text: out }, { quoted: wait });
   },
 
-  // 2. KIRIM POLL/VOTING
-  // poll: async (ctx) => {
-  //   const { connection, jid, text } = ctx;
-  //   const lines = text.trim().split("\n");
-  //   if (lines.length < 3)
-  //     return await connection.sendMessage(jid, {
-  //       text: "❗ Gunakan:\n.poll Pertanyaan?\nOpsi A\nOpsi B",
-  //     });
-  //   const name = lines[0].slice(5).trim();
-  //   const values = lines.slice(1);
-  //   await connection.sendMessage(jid, { poll: { name, values } });
-  // },
-
   poll: async (ctx) => {
     const { connection, jid, text } = ctx;
     const lines = text.trim().split("\n");
@@ -963,30 +750,10 @@ Ketik command di atas untuk mencoba fitur WhiteBot.`;
     await connection.sendMessage(jid, { text: "✅ Status: Online" });
   },
 
-  typing: async (ctx) => {
-    const { connection, jid } = ctx;
-    await connection.sendPresenceUpdate("composing", jid);
-    await delay(3000);
-    await connection.sendMessage(jid, { text: "Selesai mengetik!" });
-  },
-
-  recording: async (ctx) => {
-    const { connection, jid } = ctx;
-    await connection.sendPresenceUpdate("recording", jid);
-    await delay(3000);
-    await connection.sendMessage(jid, { text: "Selesai merekam!" });
-  },
-
   archive: async (ctx) => {
     const { connection, jid } = ctx;
     await connection.chatModify({ archive: true }, jid);
     await connection.sendMessage(jid, { text: "✅ Chat diarsipkan." });
-  },
-
-  mute: async (ctx) => {
-    const { connection, jid } = ctx;
-    await connection.chatModify({ mute: 8 * 60 * 60 * 1000 }, jid); // 8 jam
-    await connection.sendMessage(jid, { text: "🔇 Chat dimute 8 jam." });
   },
 
   pin: async (ctx) => {
@@ -1123,13 +890,4 @@ Ketik command di atas untuk mencoba fitur WhiteBot.`;
     }
   },
 
-  story: async (ctx) => {
-    const { connection, m, downloadMediaMessage } = ctx;
-    const media = await downloadMediaMessage(m);
-    const jid = "status@broadcast";
-    await connection.sendMessage(jid, {
-      image: media,
-      caption: "Story dari bot!",
-    });
-  },
 };
