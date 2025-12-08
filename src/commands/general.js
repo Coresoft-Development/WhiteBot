@@ -1,24 +1,29 @@
 const fs = require("fs-extra");
 const path = require("path");
 const os = require("os");
-const axios = require("axios"); 
-const ffmpeg = require("fluent-ffmpeg"); 
-const sharp = require("sharp"); 
-const { createSticker, StickerTypes } = require("wa-sticker-formatter"); 
+const axios = require("axios");
+const ffmpeg = require("fluent-ffmpeg");
+const sharp = require("sharp");
+const { createSticker, StickerTypes } = require("wa-sticker-formatter");
 const stats = require("../lib/stats");
-const tokenAuth = require("../lib/tokenAuth"); 
-const ownerAuth = require("../lib/ownerAuth"); 
+const tokenAuth = require("../lib/tokenAuth");
+const ownerAuth = require("../lib/ownerAuth");
 const { realNumber } = require("../lib/numberHelper");
 const { getRole, isOwner } = require("../lib/role");
 const { doLogout } = require("../lib/logout");
+const {
+  memberLimitSet,
+  memberLimitGet,
+  memberLimitDel,
+} = require("../lib/memberLimit");
 
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
 const autoReplyDB = new Map();
-const floodMap = new Map(); 
+const floodMap = new Map();
 const PROMOTE_COOLDOWN = 5000;
-const FLOOD_LIMIT = 5; 
-const FLOOD_WINDOW = 10000; 
+const FLOOD_LIMIT = 5;
+const FLOOD_WINDOW = 10000;
 
 const fmtBytes = (b) => {
   const u = ["B", "KB", "MB", "GB"];
@@ -68,7 +73,6 @@ function listCommands(isOwner = false) {
 }
 
 module.exports = {
-  
   ownerlogin: async (ctx) => {
     const { connection, jid, text } = ctx;
     if (getRole(jid))
@@ -103,22 +107,43 @@ module.exports = {
   },
 
   gettoken: async (ctx) => {
-    const { connection, jid } = ctx;
+    const { connection, jid, text } = ctx;
     if (!isOwner(jid))
-      // ← baru
       return await connection.sendMessage(jid, {
-        text: "❌ Fitur ini khusus owner saja!",
+        text: "❌ Fitur ini khusus owner!",
       });
     if (!ownerSession.has(jid))
       return await connection.sendMessage(jid, {
         text: "❗ Owner harus login dulu!",
       });
 
+    const arg = (text.trim().split(" ")[1] || "free").toLowerCase();
     const t = tokenAuth.create();
-    tokenAuth.set(t, "FREE"); // ← FREE = bisa dipakai siapa saja
-    await connection.sendMessage(jid, {
-      text: `✅ Token baru: ${t}\nKirim ke user yang ingin pakai bot.`,
-    });
+    let info = "";
+
+    if (arg === "free") {
+      tokenAuth.set(t, { jid: "FREE", type: "FREE", limit: 10 });
+      info = "✅ Token FREE: 10x perintah";
+    } else {
+      const durasi = {
+        "3d": { ms: 3 * 24 * 60 * 60 * 1000, nama: "3 hari" },
+        "1w": { ms: 7 * 24 * 60 * 60 * 1000, nama: "1 minggu" },
+        "1m": { ms: 30 * 24 * 60 * 60 * 1000, nama: "1 bulan" },
+        "1y": { ms: 365 * 24 * 60 * 60 * 1000, nama: "1 tahun" },
+      }[arg];
+      if (!durasi)
+        return await connection.sendMessage(jid, {
+          text: "❗ Pilihan: 3d | 1w | 1m | 1y | free",
+        });
+
+      const expire = Date.now() + durasi.ms;
+      tokenAuth.set(t, { jid: "DURASI", type: arg, expire });
+      info = `✅ Token ${durasi.nama} (expire ${new Date(expire).toLocaleString(
+        "id-ID"
+      )})`;
+    }
+
+    await connection.sendMessage(jid, { text: `${info}\nToken: *${t}*` });
   },
 
   revoke: async (ctx) => {
@@ -156,13 +181,11 @@ module.exports = {
     const { connection, jid, text, m } = ctx;
     const realJid = realNumber(jid, m?.key?.participant);
 
-    // 1. Sudah login (owner/member) → tolak
     if (getRole(realJid))
       return await connection.sendMessage(jid, {
         text: "❗ Kamu sudah login! Silakan logout dulu.",
       });
 
-    // 2. Ambil token
     const args = text.trim().split(/\s+/);
     const token = args[1];
     if (!token)
@@ -170,7 +193,6 @@ module.exports = {
         text: "❗ Gunakan: .login <token>",
       });
 
-    // 3. Validasi token
     const val = tokenAuth.get(token);
     if (!val)
       return await connection.sendMessage(jid, {
@@ -182,19 +204,26 @@ module.exports = {
         text: "❌ Token telah dicabut.",
       });
     }
-    if (val !== "FREE")
-      return await connection.sendMessage(jid, {
-        text: "❌ Token sudah dipakai user lain.",
-      });
 
-    // 4. Tukar FREE → jid user
+    const now = Date.now();
+    if (val.type !== "FREE") {
+      if (now > val.expire) {
+        tokenAuth.set(token, "REVOKED");
+        return await connection.sendMessage(jid, {
+          text: "❌ Token sudah expired.",
+        });
+      }
+      // simpan object expire
+      memberLimitSet(realJid, { type: val.type, expire: val.expire });
+    } else {
+      // simpan object free
+      memberLimitSet(realJid, { type: "FREE", limit: val.limit });
+    }
+
     tokenAuth.set(token, realJid);
     userLoginMap.set(token, realJid);
     userSession.add(realJid);
-
-    await connection.sendMessage(jid, {
-      text: "✅ Login berhasil! Sekarang kamu bisa pakai semua fitur bot.",
-    });
+    await connection.sendMessage(jid, { text: "✅ Login berhasil!" });
   },
 
   logout: async (ctx) => {
@@ -205,6 +234,7 @@ module.exports = {
         text: "❗ Kamu belum login.",
       });
 
+    memberLimitDel(realJid);
     await connection.sendMessage(jid, {
       text: "✅ Member logout berhasil. Token bisa dipakai lagi.",
     });
@@ -227,10 +257,31 @@ module.exports = {
     const uptime = upTime(process.uptime());
     const role = getRole(realJid); // "owner" | "member"
     const roleText = role === "owner" ? "🛠️ Owner" : "👤 Member";
-
     const waktuSrv = new Date().toLocaleString("id-ID", {
       timeZone: "Asia/Jakarta",
     });
+
+    // --- cek limit TANPA mengurangi ---
+    const lim = memberLimitGet(realJid);
+    let sisaText = "";
+    if (!lim) {
+      sisaText = "♾️ unlimited";
+    } else if (lim.type === "FREE") {
+      sisaText = `🎫 Free: ${lim.limit} perintah lagi`;
+    } else {
+      const sisaMs = lim.expire - Date.now();
+      if (sisaMs <= 0) sisaText = "⏰ Expired";
+      else {
+        const h = Math.floor(sisaMs / (1000 * 60 * 60));
+        const d = Math.floor(h / 24);
+        const m = Math.floor(h / 24 / 30);
+        const y = Math.floor(m / 12);
+        if (y >= 1) sisaText = `📅 Sisa: ${y} tahun`;
+        else if (m >= 1) sisaText = `📅 Sisa: ${m} bulan`;
+        else if (d >= 1) sisaText = `📅 Sisa: ${d} hari`;
+        else sisaText = `⏳ Sisa: ${h} jam`;
+      }
+    }
 
     const text = `Hai @${userName} 👋, *${process.env.BOT_NAME}* siap membantu!
 *Role Kamu:* ${roleText}
@@ -240,7 +291,7 @@ module.exports = {
 ├ User baru: ${stat.user_today}
 ├ Total aktif: ${total}
 ├ RAM: ${ram}
-├ Uptime: ${uptime}
+├ ${sisaText}
 └ Waktu server: ${waktuSrv}
 
 💡 *Command*
@@ -248,7 +299,7 @@ module.exports = {
 ├ .ping     – cek kecepatan bot
 └ .about    – info versi & owner
 
-Ketik command di diatas untuk mencoba fitur WhiteBot. ABACDE`;
+Ketik command di atas untuk mencoba fitur WhiteBot.`;
 
     try {
       await connection.sendMessage(jid, {
@@ -275,7 +326,6 @@ Ketik command di diatas untuk mencoba fitur WhiteBot. ABACDE`;
         headerType: 1,
       });
     } catch (e) {
-      // Fallback untuk client yang tidak support button
       const isOwner = ownerSession.has(realJid);
       const cmdList = listCommands(isOwner).join("  •  ");
       await connection.sendMessage(jid, {
@@ -312,7 +362,7 @@ Ketik command di diatas untuk mencoba fitur WhiteBot. ABACDE`;
       thumb = null;
     }
     const text = `*${process.env.BOT_NAME}* – WhatsApp Bot
-├ Version : 1.6.1
+├ Version : 1.0.0
 ├ Runtime : Node.js ${process.version}
 ├ Owner   : wa.me/${process.env.OWNER_NUMBER}
 ├ Library : @whiskeysockets/baileys
@@ -664,14 +714,237 @@ Ketik command di diatas untuk mencoba fitur WhiteBot. ABACDE`;
     }
   },
 
-  location: async (ctx) => {
-    const { connection, jid } = ctx;
-    await connection.sendMessage(jid, {
-      location: {
-        degreesLatitude: -6.2,
-        degreesLongitude: 106.816666,
-      },
+  whois: async (ctx) => {
+    const { connection, jid, text } = ctx;
+    const raw = text.trim().split(/\s+/)[1];
+    if (!raw)
+      return await connection.sendMessage(jid, {
+        text: "❗ Gunakan: .whois example.com",
+      });
+
+    // hapus protokol & path
+    const target = raw.replace(/^https?:\/\//, "").split("/")[0];
+    const waitMsg = await connection.sendMessage(jid, {
+      text: "⏳ Sedang mengecek...",
     });
+
+    try {
+      // IPwho.is support IP maupun domain
+      const { data } = await axios.get(
+        `https://ipwho.is/${encodeURIComponent(target)}`,
+        { timeout: 7000 }
+      );
+
+      const out = data.success
+        ? `*WHOIS* ${target}\n├ IP: ${data.ip}\n├ Negara: ${data.country} (${data.country_code})\n├ ISP: ${data.isp}\n└ Org: ${data.org}`
+        : "❌ Tidak ditemukan / bukan IP / domain valid.";
+      await connection.sendMessage(jid, { text: out }, { quoted: waitMsg });
+    } catch {
+      await connection.sendMessage(
+        jid,
+        { text: "❌ Gagal cek (timeout)." },
+        { quoted: waitMsg }
+      );
+    }
+  },
+
+  subdomain: async (ctx) => {
+    const { connection, jid, text } = ctx;
+    const domain = text.trim().split(/\s+/)[1];
+    if (!domain)
+      return await connection.sendMessage(jid, {
+        text: "❗ Gunakan: .subdomain example.com",
+      });
+
+    const waitMsg = await connection.sendMessage(jid, {
+      text: "🔍 Sedang memindai sub-domain di crt.sh...",
+    });
+
+    try {
+      // endpoint benar (tanpa spasi)
+      const { data } = await axios.get(
+        `https://crt.sh/?q=%25.${encodeURIComponent(domain)}&output=json`,
+        { timeout: 10000 }
+      );
+
+      // normalize: hilangkan wildcard & duplikat
+      const subs = [
+        ...new Set(
+          data
+            .map((r) =>
+              r.name_value
+                .split("\n")[0] // ambil baris pertama
+                .replace(/^\*\./, "") // buang *.
+                .toLowerCase()
+            )
+            .filter((s) => s.endsWith(`.${domain}`))
+        ),
+      ].slice(0, 30);
+
+      const out = subs.length
+        ? `🔍 *Sub-domain ditemukan (${subs.length})*\n${subs.join("\n")}`
+        : "❌ Tidak ada sub-domain ter-index.";
+      await connection.sendMessage(jid, { text: out }, { quoted: waitMsg });
+    } catch {
+      await connection.sendMessage(
+        jid,
+        { text: "❌ Gagal ambil data." },
+        { quoted: waitMsg }
+      );
+    }
+  },
+
+  usercheck: async (ctx) => {
+    const { connection, jid, text } = ctx;
+    const user = text.trim().split(/\s+/)[1];
+    if (!user || !/^[a-zA-Z0-9._-]{2,30}$/.test(user))
+      return await connection.sendMessage(jid, {
+        text: "❗ Gunakan: .usercheck namauser (tanpa spasi).",
+      });
+
+    const POPULAR = [
+      { name: "Instagram", url: `https://instagram.com/${user}` },
+      { name: "Facebook", url: `https://facebook.com/${user}` },
+      { name: "Twitter", url: `https://twitter.com/${user}` },
+      { name: "TikTok", url: `https://tiktok.com/@${user}` },
+      { name: "YouTube", url: `https://youtube.com/@${user}` },
+      { name: "LinkedIn", url: `https://linkedin.com/in/${user}` },
+      { name: "GitHub", url: `https://github.com/${user}` },
+      { name: "Reddit", url: `https://reddit.com/u/${user}` },
+      { name: "Pinterest", url: `https://pinterest.com/${user}` },
+      { name: "Twitch", url: `https://twitch.tv/${user}` },
+      { name: "Discord", url: `https://discord.com/users/${user}` },
+      { name: "Telegram", url: `https://t.me/${user}` },
+      { name: "WhatsApp", url: `https://wa.me/${user}` },
+      { name: "Snapchat", url: `https://snapchat.com/add/${user}` },
+      { name: "Spotify", url: `https://open.spotify.com/user/${user}` },
+      { name: "Google", url: `https://g.dev/${user}` },
+    ];
+
+    const OTHER = [
+      { name: "Medium", url: `https://medium.com/@${user}` },
+      { name: "GitLab", url: `https://gitlab.com/${user}` },
+      { name: "npm", url: `https://npmjs.com/~${user}` },
+      { name: "Docker Hub", url: `https://hub.docker.com/u/${user}` },
+      { name: "Kaggle", url: `https://kaggle.com/${user}` },
+      { name: "Steam", url: `https://steamcommunity.com/id/${user}` },
+      { name: "Notion", url: `https://notion.so/@${user}` },
+      { name: "CodePen", url: `https://codepen.io/${user}` },
+      { name: "Replit", url: `https://replit.com/@${user}` },
+      { name: "Flickr", url: `https://flickr.com/people/${user}` },
+      { name: "Vimeo", url: `https://vimeo.com/${user}` },
+      { name: "Behance", url: `https://behance.net/${user}` },
+      { name: "Dribbble", url: `https://dribbble.com/${user}` },
+      { name: "SlideShare", url: `https://slideshare.net/${user}` },
+      { name: "DeviantArt", url: `https://deviantart.com/${user}` },
+      { name: "BandLab", url: `https://bandlab.com/${user}` },
+      { name: "SoundCloud", url: `https://soundcloud.com/${user}` },
+      { name: "MySpace", url: `https://myspace.com/${user}` },
+      { name: "Wattpad", url: `https://wattpad.com/user/${user}` },
+      { name: "TripAdvisor", url: `https://tripadvisor.com/members/${user}` },
+      { name: "Foursquare", url: `https://foursquare.com/${user}` },
+      { name: "Airbnb", url: `https://airbnb.com/users/${user}` },
+      { name: "Booking", url: `https://booking.com/profile/${user}` },
+      { name: "Amazon", url: `https://amazon.com/gp/profile/${user}` },
+      { name: "eBay", url: `https://ebay.com/usr/${user}` },
+      { name: "Etsy", url: `https://etsy.com/people/${user}` },
+      { name: "Patreon", url: `https://patreon.com/${user}` },
+      { name: "Ko-fi", url: `https://ko-fi.com/${user}` },
+      { name: "BuyMeACoffee", url: `https://buymeacoffee.com/${user}` },
+      { name: "Udemy", url: `https://udemy.com/user/${user}` },
+      { name: "Coursera", url: `https://coursera.org/user/${user}` },
+      { name: "KhanAcademy", url: `https://khanacademy.org/profile/${user}` },
+      { name: "WordPress", url: `https://${user}.wordpress.com` },
+      { name: "Blogger", url: `https://${user}.blogspot.com` },
+      { name: "Wix", url: `https://${user}.wixsite.com` },
+      { name: "Trello", url: `https://trello.com/${user}` },
+      { name: "Telegram", url: `https://t.me/${user}` },
+      { name: "Signal", url: `https://signal.me/#u/${user}` },
+      { name: "Viber", url: `https://viber.me/${user}` },
+      { name: "Line", url: `https://line.me/R/ti/p/@${user}` },
+      { name: "Snapchat", url: `https://snapchat.com/add/${user}` },
+      { name: "Skype", url: `https://join.skype.com/invite/${user}` },
+      { name: "Zoom", url: `https://zoom.us/u/${user}` },
+      { name: "Slack", url: `https://${user}.slack.com` },
+      { name: "Discord", url: `https://discord.gg/${user}` },
+      { name: "Clubhouse", url: `https://clubhouse.com/@${user}` },
+      { name: "TikTok", url: `https://tiktok.com/@${user}` },
+      { name: "YouTube", url: `https://youtube.com/@${user}` },
+      { name: "Twitch", url: `https://twitch.tv/${user}` },
+      { name: "Steam", url: `https://steamcommunity.com/id/${user}` },
+      {
+        name: "Xbox",
+        url: `https://account.xbox.com/Profile?Gamertag=${user}`,
+      },
+      {
+        name: "PlayStation",
+        url: `https://my.playstation.com/profile/${user}`,
+      },
+      {
+        name: "EpicGames",
+        url: `https://www.epicgames.com/id/help/en-US/profiles/${user}`,
+      },
+      { name: "Roblox", url: `https://roblox.com/user.aspx?username=${user}` },
+      { name: "Minecraft", url: `https://namemc.com/profile/${user}` },
+      { name: "PayPal", url: `https://paypal.com/paypalme/${user}` },
+      { name: "Wise", url: `https://wise.com/invite/u/${user}` },
+      { name: "Binance", url: `https://binance.com/en/user/profile/${user}` },
+      { name: "Coinbase", url: `https://coinbase.com/${user}` },
+      { name: "Blockchain", url: `https://blockchain.com/btc/address/${user}` },
+      { name: "GitLab", url: `https://gitlab.com/${user}` },
+      { name: "Bitbucket", url: `https://bitbucket.org/${user}` },
+      { name: "npm", url: `https://npmjs.com/~${user}` },
+      { name: "PyPI", url: `https://pypi.org/user/${user}` },
+      { name: "Docker Hub", url: `https://hub.docker.com/u/${user}` },
+      { name: "HackerRank", url: `https://hackerrank.com/${user}` },
+      { name: "LeetCode", url: `https://leetcode.com/${user}` },
+      { name: "Kaggle", url: `https://kaggle.com/${user}` },
+      { name: "CodePen", url: `https://codepen.io/${user}` },
+      { name: "Replit", url: `https://replit.com/@${user}` },
+      {
+        name: "StackOverflow",
+        url: `https://stackoverflow.com/users/1/${user}`,
+      },
+      { name: "Medium", url: `https://medium.com/@${user}` },
+      { name: "DeviantArt", url: `https://deviantart.com/${user}` },
+      { name: "Behance", url: `https://behance.net/${user}` },
+      { name: "Dribbble", url: `https://dribbble.com/${user}` },
+      { name: "Vimeo", url: `https://vimeo.com/${user}` },
+      { name: "Flickr", url: `https://flickr.com/people/${user}` },
+      { name: "SlideShare", url: `https://slideshare.net/${user}` },
+    ];
+
+    /* Gabungkan – populer dicek dulu */
+    const allSites = [...POPULAR, ...OTHER];
+
+    const waitMsg = await connection.sendMessage(jid, {
+      text: `⏳ Sedang mengecek username *${user}* di ${allSites.length} situs...`,
+    });
+
+    const results = [];
+    const maxConcurrent = 15;
+    for (let i = 0; i < allSites.length; i += maxConcurrent) {
+      const chunk = allSites.slice(i, i + maxConcurrent);
+      await Promise.all(
+        chunk.map(async (s) => {
+          try {
+            const cek = await axios.head(s.url, { timeout: 5000 });
+            if (cek.status < 400) results.push(`✅ ${s.name} – ${s.url}`);
+            else results.push(`❌ ${s.name} – tidak ditemukan`);
+          } catch {
+            results.push(`❌ ${s.name} – tidak ditemukan`);
+          }
+        })
+      );
+      await new Promise((r) => setTimeout(r, 1000)); // jeda antiratelimit
+    }
+
+    const header = `🔍 *Username Check : @${user}*\n${results.length} situs diperiksa\n\n`;
+    await connection.sendMessage(
+      jid,
+      { text: header + results.join("\n") },
+      { quoted: waitMsg }
+    );
   },
 
   // 2. KIRIM POLL/VOTING
@@ -699,7 +972,6 @@ Ketik command di diatas untuk mencoba fitur WhiteBot. ABACDE`;
     await connection.sendMessage(jid, { poll: { name, values } });
   },
 
-  // 3. STATUS ONLINE/TYPING/RECORDING
   online: async (ctx) => {
     const { connection, jid } = ctx;
     await connection.sendPresenceUpdate("available", jid);
@@ -720,7 +992,6 @@ Ketik command di diatas untuk mencoba fitur WhiteBot. ABACDE`;
     await connection.sendMessage(jid, { text: "Selesai merekam!" });
   },
 
-  // 4. ARSIP/MUTE/PIN CHAT
   archive: async (ctx) => {
     const { connection, jid } = ctx;
     await connection.chatModify({ archive: true }, jid);
@@ -739,7 +1010,6 @@ Ketik command di diatas untuk mencoba fitur WhiteBot. ABACDE`;
     await connection.sendMessage(jid, { text: "📌 Chat dipin." });
   },
 
-  // 5. FOTO PROFIL
   getpp: async (ctx) => {
     const { connection, jid, m } = ctx;
     const target =
@@ -760,7 +1030,6 @@ Ketik command di diatas untuk mencoba fitur WhiteBot. ABACDE`;
     }
   },
 
-  // 6. CEK NOMOR ADA DI WHATSAPP
   onwa: async (ctx) => {
     const { connection, jid, text } = ctx;
     const num = text.trim().split(" ")[1];
@@ -785,7 +1054,6 @@ Ketik command di diatas untuk mencoba fitur WhiteBot. ABACDE`;
     }
   },
 
-  // 7. BROADCAST TEKS
   broadcast: async (ctx) => {
     const { connection, jid, text } = ctx;
     if (!isOwner(jid))
@@ -817,7 +1085,6 @@ Ketik command di diatas untuk mencoba fitur WhiteBot. ABACDE`;
     });
   },
 
-  // 8. KELUAR GRUP (bot leave)
   leave: async (ctx) => {
     const { connection, jid } = ctx;
     const realJid = realNumber(jid, message.key.participant);
@@ -834,7 +1101,6 @@ Ketik command di diatas untuk mencoba fitur WhiteBot. ABACDE`;
     }
   },
 
-  // 9. UNDANG MEMBER
   invite: async (ctx) => {
     const { connection, jid, m, text } = ctx;
     const realJid = realNumber(jid, m.key.participant);
@@ -872,7 +1138,6 @@ Ketik command di diatas untuk mencoba fitur WhiteBot. ABACDE`;
     }
   },
 
-  // 10. KIRIM STORY (status broadcast)
   story: async (ctx) => {
     const { connection, m, downloadMediaMessage } = ctx;
     const media = await downloadMediaMessage(m);

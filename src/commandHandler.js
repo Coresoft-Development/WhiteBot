@@ -2,6 +2,8 @@ const commands = require("./commands");
 const ownerNumber = process.env.OWNER_NUMBER + "@s.whatsapp.net";
 const { realNumber } = require("./lib/numberHelper");
 const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
+// const { memberLimitGet } = require("./lib/memberLimit");
+const { memberLimitSet, memberLimitGet } = require("./lib/memberLimit");
 
 const {
   ownerSession,
@@ -10,6 +12,7 @@ const {
   autoReplyPerUser,
   autoReplyDB,
 } = require("./lib/sessionStore");
+
 const skipLogin = [
   ".login",
   "login",
@@ -18,6 +21,8 @@ const skipLogin = [
   ".help",
   "help",
 ];
+
+const FREE_CMD = ["login", "logout", "menu", "help", "about", "ping"];
 
 async function downloadMediaMessage(msg) {
   const type = Object.keys(msg.message)[0].replace("Message", "");
@@ -90,6 +95,21 @@ module.exports = async ({ connection, message, jid, text, fromMe, db }) => {
         { text: personal },
         { quoted: message }
       );
+    }
+  }
+
+  /* KURANGI LIMIT MEMBER (kecuali command izin) */
+  if (!fromMe && !FREE_CMD.includes(cmd)) {
+    const lim = memberLimitGet(realSender);
+    if (lim) {
+      if (lim.type === "FREE") {
+        if (lim.limit <= 0) {
+          return await connection.sendMessage(jid, {
+            text: "❌ Kesempatan habis. Silakan minta token baru ke owner.",
+          });
+        }
+        memberLimitSet(realSender, { ...lim, limit: lim.limit - 1 });
+      }
     }
   }
 

@@ -4,7 +4,7 @@
  * - hitung & log berhasil / gagal
  * - tambahan command baru: status, adduser, deluser
  */
-const delay = ms => new Promise(res => setTimeout(res, ms));
+const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
 module.exports = {
   /* ------------------------------------------------------
@@ -12,15 +12,21 @@ module.exports = {
    *    delay 1.2 detik antar pesan (aman dari spam block)
    * ------------------------------------------------------ */
   broadcast: async ({ connection, args, db }) => {
-    const text = args.join(' ');
-    if (!text) return connection.sendMessage(connection.jid, { text: '❗ Gunakan: .broadcast <teks>' });
+    const text = args.join(" ");
+    if (!text)
+      return connection.sendMessage(connection.jid, {
+        text: "❗ Gunakan: .broadcast <teks>",
+      });
 
     const users = db.getAllUsers();
-    let sent = 0, fail = 0;
+    let sent = 0,
+      fail = 0;
 
     for (const u of users) {
       try {
-        await connection.sendMessage(u.jid, { text: `📢 *WhiteBot Broadcast*\n\n${text}` });
+        await connection.sendMessage(u.jid, {
+          text: `📢 *WhiteBot Broadcast*\n\n${text}`,
+        });
         sent++;
         await delay(1200); // anti spam
       } catch (e) {
@@ -31,7 +37,9 @@ module.exports = {
 
     // laporan ke owner
     db.logBroadcast(connection.jid, text, sent);
-    await connection.sendMessage(connection.jid, { text: `✅ Broadcast selesai\nTerkirim: ${sent}\nGagal: ${fail}` });
+    await connection.sendMessage(connection.jid, {
+      text: `✅ Broadcast selesai\nTerkirim: ${sent}\nGagal: ${fail}`,
+    });
   },
 
   /* ------------------------------------------------------
@@ -52,24 +60,34 @@ module.exports = {
    * ------------------------------------------------------ */
   adduser: async ({ connection, args, db }) => {
     // .adduser 628xxx Nama
-    if (args.length < 2) return connection.sendMessage(connection.jid, { text: '❗ Format: .adduser 628xxx Nama' });
-    const phone = args[0].replace(/\D/g, '');
-    const name  = args.slice(1).join(' ');
-    const jid   = phone + '@s.whatsapp.net';
+    if (args.length < 2)
+      return connection.sendMessage(connection.jid, {
+        text: "❗ Format: .adduser 628xxx Nama",
+      });
+    const phone = args[0].replace(/\D/g, "");
+    const name = args.slice(1).join(" ");
+    const jid = phone + "@s.whatsapp.net";
 
     db.addUser(jid, name, phone);
-    await connection.sendMessage(connection.jid, { text: `✅ User ${phone} (${name}) ditambahkan.` });
+    await connection.sendMessage(connection.jid, {
+      text: `✅ User ${phone} (${name}) ditambahkan.`,
+    });
   },
 
   /* ------------------------------------------------------
    * 4. HAPUS USER (owner)
    * ------------------------------------------------------ */
   deluser: async ({ connection, args, db }) => {
-    const phone = args[0]?.replace(/\D/g, '');
-    if (!phone) return connection.sendMessage(connection.jid, { text: '❗ Format: .deluser 628xxx' });
-    const jid = phone + '@s.whatsapp.net';
+    const phone = args[0]?.replace(/\D/g, "");
+    if (!phone)
+      return connection.sendMessage(connection.jid, {
+        text: "❗ Format: .deluser 628xxx",
+      });
+    const jid = phone + "@s.whatsapp.net";
 
-    db.db.prepare('DELETE FROM users WHERE jid = ?').run(jid);
-    await connection.sendMessage(connection.jid, { text: `🗑️  User ${phone} dihapus.` });
-  }
+    db.db.prepare("DELETE FROM users WHERE jid = ?").run(jid);
+    await connection.sendMessage(connection.jid, {
+      text: `🗑️  User ${phone} dihapus.`,
+    });
+  },
 };
