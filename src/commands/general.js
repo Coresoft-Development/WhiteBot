@@ -213,11 +213,16 @@ module.exports = {
           text: "❌ Token sudah expired.",
         });
       }
-      // simpan object expire
+      // token durasi – simpan expire
       memberLimitSet(realJid, { type: val.type, expire: val.expire });
     } else {
-      // simpan object free
-      memberLimitSet(realJid, { type: "FREE", limit: val.limit });
+      // Kalau sudah pernah punya limit FREE, lanjutkan sisa; kalau belum baru 10
+      const old = memberLimitGet(realJid);
+      if (old && old.type === "FREE") {
+        memberLimitSet(realJid, { type: "FREE", limit: old.limit });
+      } else {
+        memberLimitSet(realJid, { type: "FREE", limit: val.limit });
+      }
     }
 
     tokenAuth.set(token, realJid);
@@ -228,11 +233,29 @@ module.exports = {
 
   logout: async (ctx) => {
     const { connection, jid } = ctx;
-    const role = doLogout(jid);
+    const realJid = realNumber(jid, ctx.m?.key?.participant);
+    const role = doLogout(realJid);
     if (!role)
       return await connection.sendMessage(jid, {
         text: "❗ Kamu belum login.",
       });
+
+    /* 1. Hapus session */
+    userSession.delete(realJid);
+    ownerSession.delete(realJid);
+
+    /* 2. Kembalikan token FREE agar bisa dipakai lagi */
+    for (const [tok, uid] of userLoginMap.entries()) {
+      if (uid === realJid) {
+        const val = tokenAuth.get(tok);
+        if (val && val !== "REVOKED" && val.type === "FREE") {
+          // Simpan sisa limit
+          tokenAuth.set(tok, { type: "FREE", limit: val.limit });
+        }
+        userLoginMap.delete(tok);
+        break; // cukup 1x
+      }
+    }
 
     memberLimitDel(realJid);
     await connection.sendMessage(jid, {
@@ -714,237 +737,199 @@ Ketik command di atas untuk mencoba fitur WhiteBot.`;
     }
   },
 
-  whois: async (ctx) => {
+  osint: async (ctx) => {
     const { connection, jid, text } = ctx;
-    const raw = text.trim().split(/\s+/)[1];
-    if (!raw)
+    const [tipe, ...targetArr] = text.trim().split(/\s+/);
+    const target = targetArr.join(" ");
+    if (!tipe || !target)
       return await connection.sendMessage(jid, {
-        text: "❗ Gunakan: .whois example.com",
+        text: "❗ .osint <ip|domain|username|email|phone|btc|sos|sub|whois|breach|paste|iot|web|git> <target>",
       });
 
-    // hapus protokol & path
-    const target = raw.replace(/^https?:\/\//, "").split("/")[0];
-    const waitMsg = await connection.sendMessage(jid, {
-      text: "⏳ Sedang mengecek...",
+    const wait = await connection.sendMessage(jid, {
+      text: `⏳ Sedang mengecek *${tipe}* ...`,
     });
 
+    let out = "";
     try {
-      // IPwho.is support IP maupun domain
-      const { data } = await axios.get(
-        `https://ipwho.is/${encodeURIComponent(target)}`,
-        { timeout: 7000 }
-      );
+      switch (tipe) {
+        /* 1. IP + ISP + Lokasi (publik) */
+        case "ip":
+          const { data: a } = await axios.get(
+            `https://ipwho.is/${encodeURIComponent(target)}`
+          );
+          out = a.success
+            ? `📡 IP : ${a.ip}\nNegara : ${a.country} (${a.country_code})\nISP : ${a.isp}\nOrg : ${a.org}\nKota : ${a.city}\nLat/Lon : ${a.latitude}, ${a.longitude}`
+            : "❌ IP tidak valid.";
+          break;
 
-      const out = data.success
-        ? `*WHOIS* ${target}\n├ IP: ${data.ip}\n├ Negara: ${data.country} (${data.country_code})\n├ ISP: ${data.isp}\n└ Org: ${data.org}`
-        : "❌ Tidak ditemukan / bukan IP / domain valid.";
-      await connection.sendMessage(jid, { text: out }, { quoted: waitMsg });
-    } catch {
-      await connection.sendMessage(
-        jid,
-        { text: "❌ Gagal cek (timeout)." },
-        { quoted: waitMsg }
-      );
-    }
-  },
+        /* 2. Domain + Sub-domain (crt.sh JSON publik) */
+        case "domain":
+        case "sub":
+          const { data: b } = await axios.get(
+            `https://crt.sh/?q=%25.${encodeURIComponent(target)}&output=json`
+          );
+          const subs = [
+            ...new Set(
+              b
+                .map((r) =>
+                  r.name_value.split("\n")[0].replace("*.", "").toLowerCase()
+                )
+                .filter((s) => s.endsWith(target))
+            ),
+          ].slice(0, 30);
+          out = subs.length
+            ? `🔍 Sub-domain (${subs.length})\n${subs.join("\n")}`
+            : "❌ Tidak ada subdomain ter-index.";
+          break;
 
-  subdomain: async (ctx) => {
-    const { connection, jid, text } = ctx;
-    const domain = text.trim().split(/\s+/)[1];
-    if (!domain)
-      return await connection.sendMessage(jid, {
-        text: "❗ Gunakan: .subdomain example.com",
-      });
+        /* 3. Username 350+ situs (WMN publik) */
+        case "username":
+        case "sos": {
+          const wmn = await axios.get(
+            "https://whatsmyname.app/json/wmn-data.json"
+          );
+          const sites = wmn.data.data
+            .filter((s) => !s.category.toLowerCase().includes("crypto"))
+            .slice(0, 40);
+          const urls = sites.map((s) => s.uri.replace("{|username|}", target));
 
-    const waitMsg = await connection.sendMessage(jid, {
-      text: "🔍 Sedang memindai sub-domain di crt.sh...",
-    });
+          const checked = await Promise.allSettled(
+            // <-- ganti nama
+            urls.map((u) => axios.head(u, { timeout: 4000 }))
+          );
 
-    try {
-      // endpoint benar (tanpa spasi)
-      const { data } = await axios.get(
-        `https://crt.sh/?q=%25.${encodeURIComponent(domain)}&output=json`,
-        { timeout: 10000 }
-      );
-
-      // normalize: hilangkan wildcard & duplikat
-      const subs = [
-        ...new Set(
-          data
-            .map((r) =>
-              r.name_value
-                .split("\n")[0] // ambil baris pertama
-                .replace(/^\*\./, "") // buang *.
-                .toLowerCase()
+          const ok = checked
+            .map((r, i) =>
+              r.value?.status === 200
+                ? `✅ ${sites[i].name} – ${urls[i]}`
+                : null
             )
-            .filter((s) => s.endsWith(`.${domain}`))
-        ),
-      ].slice(0, 30);
+            .filter(Boolean);
 
-      const out = subs.length
-        ? `🔍 *Sub-domain ditemukan (${subs.length})*\n${subs.join("\n")}`
-        : "❌ Tidak ada sub-domain ter-index.";
-      await connection.sendMessage(jid, { text: out }, { quoted: waitMsg });
-    } catch {
-      await connection.sendMessage(
-        jid,
-        { text: "❌ Gagal ambil data." },
-        { quoted: waitMsg }
-      );
-    }
-  },
+          out = ok.length
+            ? `✔ ${target} ditemukan di ${ok.length} situs:\n${ok.join("\n")}`
+            : `❌ ${target} tidak ditemukan di WMN top-40.`;
+          break;
+        }
 
-  usercheck: async (ctx) => {
-    const { connection, jid, text } = ctx;
-    const user = text.trim().split(/\s+/)[1];
-    if (!user || !/^[a-zA-Z0-9._-]{2,30}$/.test(user))
-      return await connection.sendMessage(jid, {
-        text: "❗ Gunakan: .usercheck namauser (tanpa spasi).",
-      });
+        /* 4. Email breach (HaveIBeenPwned HTML scrape) */
+        case "email":
+        case "breach":
+          const { data: h } = await axios.get(
+            `https://haveibeenpwned.com/account/${encodeURIComponent(target)}`,
+            { headers: { "User-Agent": "Mozilla/5.0" } }
+          );
+          const breach = h.match(/class=\"pwnedTitle.*>(.*)<\/h3>/)
+            ? h.match(/class=\"pwnedTitle.*>(.*)<\/h3>/)[1].trim()
+            : null;
+          out = breach
+            ? `📧 ${target} terbreach: ${breach}`
+            : `✅ ${target} bersih (tidak terbreach).`;
+          break;
 
-    const POPULAR = [
-      { name: "Instagram", url: `https://instagram.com/${user}` },
-      { name: "Facebook", url: `https://facebook.com/${user}` },
-      { name: "Twitter", url: `https://twitter.com/${user}` },
-      { name: "TikTok", url: `https://tiktok.com/@${user}` },
-      { name: "YouTube", url: `https://youtube.com/@${user}` },
-      { name: "LinkedIn", url: `https://linkedin.com/in/${user}` },
-      { name: "GitHub", url: `https://github.com/${user}` },
-      { name: "Reddit", url: `https://reddit.com/u/${user}` },
-      { name: "Pinterest", url: `https://pinterest.com/${user}` },
-      { name: "Twitch", url: `https://twitch.tv/${user}` },
-      { name: "Discord", url: `https://discord.com/users/${user}` },
-      { name: "Telegram", url: `https://t.me/${user}` },
-      { name: "WhatsApp", url: `https://wa.me/${user}` },
-      { name: "Snapchat", url: `https://snapchat.com/add/${user}` },
-      { name: "Spotify", url: `https://open.spotify.com/user/${user}` },
-      { name: "Google", url: `https://g.dev/${user}` },
-    ];
+        /* 5. Phone carrier (numverify scrape) */
+        case "phone":
+          const { data: p } = await axios.get(`https://numverify.com/`, {
+            headers: { "User-Agent": "Mozilla/5.0" },
+          });
+          const tk = p.match(/name=\"csrfToken\" value=\"([^\"]+)\"/)?.[1];
+          if (!tk) throw "Token CSRF tidak ditemukan";
+          const cek = await axios.post(
+            `https://numverify.com/php_helper_scripts/phone_api.php`,
+            `csrfToken=${tk}&number=${encodeURIComponent(target)}`,
+            {
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "Mozilla/5.0",
+              },
+            }
+          );
+          const res = cek.data;
+          out = res.valid
+            ? `📱 ${target}\nNegara : ${res.country_name}\nCarrier : ${res.carrier}\nTipe : ${res.line_type}`
+            : "❌ Nomor tidak valid.";
+          break;
 
-    const OTHER = [
-      { name: "Medium", url: `https://medium.com/@${user}` },
-      { name: "GitLab", url: `https://gitlab.com/${user}` },
-      { name: "npm", url: `https://npmjs.com/~${user}` },
-      { name: "Docker Hub", url: `https://hub.docker.com/u/${user}` },
-      { name: "Kaggle", url: `https://kaggle.com/${user}` },
-      { name: "Steam", url: `https://steamcommunity.com/id/${user}` },
-      { name: "Notion", url: `https://notion.so/@${user}` },
-      { name: "CodePen", url: `https://codepen.io/${user}` },
-      { name: "Replit", url: `https://replit.com/@${user}` },
-      { name: "Flickr", url: `https://flickr.com/people/${user}` },
-      { name: "Vimeo", url: `https://vimeo.com/${user}` },
-      { name: "Behance", url: `https://behance.net/${user}` },
-      { name: "Dribbble", url: `https://dribbble.com/${user}` },
-      { name: "SlideShare", url: `https://slideshare.net/${user}` },
-      { name: "DeviantArt", url: `https://deviantart.com/${user}` },
-      { name: "BandLab", url: `https://bandlab.com/${user}` },
-      { name: "SoundCloud", url: `https://soundcloud.com/${user}` },
-      { name: "MySpace", url: `https://myspace.com/${user}` },
-      { name: "Wattpad", url: `https://wattpad.com/user/${user}` },
-      { name: "TripAdvisor", url: `https://tripadvisor.com/members/${user}` },
-      { name: "Foursquare", url: `https://foursquare.com/${user}` },
-      { name: "Airbnb", url: `https://airbnb.com/users/${user}` },
-      { name: "Booking", url: `https://booking.com/profile/${user}` },
-      { name: "Amazon", url: `https://amazon.com/gp/profile/${user}` },
-      { name: "eBay", url: `https://ebay.com/usr/${user}` },
-      { name: "Etsy", url: `https://etsy.com/people/${user}` },
-      { name: "Patreon", url: `https://patreon.com/${user}` },
-      { name: "Ko-fi", url: `https://ko-fi.com/${user}` },
-      { name: "BuyMeACoffee", url: `https://buymeacoffee.com/${user}` },
-      { name: "Udemy", url: `https://udemy.com/user/${user}` },
-      { name: "Coursera", url: `https://coursera.org/user/${user}` },
-      { name: "KhanAcademy", url: `https://khanacademy.org/profile/${user}` },
-      { name: "WordPress", url: `https://${user}.wordpress.com` },
-      { name: "Blogger", url: `https://${user}.blogspot.com` },
-      { name: "Wix", url: `https://${user}.wixsite.com` },
-      { name: "Trello", url: `https://trello.com/${user}` },
-      { name: "Telegram", url: `https://t.me/${user}` },
-      { name: "Signal", url: `https://signal.me/#u/${user}` },
-      { name: "Viber", url: `https://viber.me/${user}` },
-      { name: "Line", url: `https://line.me/R/ti/p/@${user}` },
-      { name: "Snapchat", url: `https://snapchat.com/add/${user}` },
-      { name: "Skype", url: `https://join.skype.com/invite/${user}` },
-      { name: "Zoom", url: `https://zoom.us/u/${user}` },
-      { name: "Slack", url: `https://${user}.slack.com` },
-      { name: "Discord", url: `https://discord.gg/${user}` },
-      { name: "Clubhouse", url: `https://clubhouse.com/@${user}` },
-      { name: "TikTok", url: `https://tiktok.com/@${user}` },
-      { name: "YouTube", url: `https://youtube.com/@${user}` },
-      { name: "Twitch", url: `https://twitch.tv/${user}` },
-      { name: "Steam", url: `https://steamcommunity.com/id/${user}` },
-      {
-        name: "Xbox",
-        url: `https://account.xbox.com/Profile?Gamertag=${user}`,
-      },
-      {
-        name: "PlayStation",
-        url: `https://my.playstation.com/profile/${user}`,
-      },
-      {
-        name: "EpicGames",
-        url: `https://www.epicgames.com/id/help/en-US/profiles/${user}`,
-      },
-      { name: "Roblox", url: `https://roblox.com/user.aspx?username=${user}` },
-      { name: "Minecraft", url: `https://namemc.com/profile/${user}` },
-      { name: "PayPal", url: `https://paypal.com/paypalme/${user}` },
-      { name: "Wise", url: `https://wise.com/invite/u/${user}` },
-      { name: "Binance", url: `https://binance.com/en/user/profile/${user}` },
-      { name: "Coinbase", url: `https://coinbase.com/${user}` },
-      { name: "Blockchain", url: `https://blockchain.com/btc/address/${user}` },
-      { name: "GitLab", url: `https://gitlab.com/${user}` },
-      { name: "Bitbucket", url: `https://bitbucket.org/${user}` },
-      { name: "npm", url: `https://npmjs.com/~${user}` },
-      { name: "PyPI", url: `https://pypi.org/user/${user}` },
-      { name: "Docker Hub", url: `https://hub.docker.com/u/${user}` },
-      { name: "HackerRank", url: `https://hackerrank.com/${user}` },
-      { name: "LeetCode", url: `https://leetcode.com/${user}` },
-      { name: "Kaggle", url: `https://kaggle.com/${user}` },
-      { name: "CodePen", url: `https://codepen.io/${user}` },
-      { name: "Replit", url: `https://replit.com/@${user}` },
-      {
-        name: "StackOverflow",
-        url: `https://stackoverflow.com/users/1/${user}`,
-      },
-      { name: "Medium", url: `https://medium.com/@${user}` },
-      { name: "DeviantArt", url: `https://deviantart.com/${user}` },
-      { name: "Behance", url: `https://behance.net/${user}` },
-      { name: "Dribbble", url: `https://dribbble.com/${user}` },
-      { name: "Vimeo", url: `https://vimeo.com/${user}` },
-      { name: "Flickr", url: `https://flickr.com/people/${user}` },
-      { name: "SlideShare", url: `https://slideshare.net/${user}` },
-    ];
+        /* 6. BTC balance (Blockchain.info publik) */
+        case "btc":
+          const { data: btc } = await axios.get(
+            `https://blockchain.info/rawaddr/${encodeURIComponent(target)}`
+          );
+          out = `₿ Address : ${target}\nBalance : ${(
+            btc.final_balance / 1e8
+          ).toFixed(8)} BTC\nTx : ${btc.n_tx}`;
+          break;
 
-    /* Gabungkan – populer dicek dulu */
-    const allSites = [...POPULAR, ...OTHER];
+        /* 7. PasteBin dump (psbdmp.cc JSON publik) */
+        case "paste":
+          const { data: pst } = await axios.get(
+            `https://psbdmp.cc/api/search/${encodeURIComponent(target)}`
+          );
+          const list =
+            pst.data
+              ?.slice(0, 10)
+              .map((p) => `https://psbdmp.cc/${p.id}`)
+              .join("\n") || null;
+          out = list
+            ? `📋 PasteBin ditemukan (${pst.data.length}):\n${list}`
+            : `✅ Tidak ada paste untuk *${target}*.`;
+          break;
 
-    const waitMsg = await connection.sendMessage(jid, {
-      text: `⏳ Sedang mengecek username *${user}* di ${allSites.length} situs...`,
-    });
+        /* 8. IoT open port (Shodan HTML scrape) */
+        case "iot":
+          const { data: sho } = await axios.get(
+            `https://www.shodan.io/host/${encodeURIComponent(target)}`,
+            { headers: { "User-Agent": "Mozilla/5.0" } }
+          );
+          const ports =
+            sho
+              .match(/<div class=\"port\">(\d+)<\/div>/g)
+              ?.map((m) => m.match(/\d+/)[0])
+              .join(", ") || null;
+          out = ports
+            ? `🔌 Port terbuka di ${target}:\n${ports}`
+            : `❌ Tidak ada port terbuka / bukan IP.`;
+          break;
 
-    const results = [];
-    const maxConcurrent = 15;
-    for (let i = 0; i < allSites.length; i += maxConcurrent) {
-      const chunk = allSites.slice(i, i + maxConcurrent);
-      await Promise.all(
-        chunk.map(async (s) => {
-          try {
-            const cek = await axios.head(s.url, { timeout: 5000 });
-            if (cek.status < 400) results.push(`✅ ${s.name} – ${s.url}`);
-            else results.push(`❌ ${s.name} – tidak ditemukan`);
-          } catch {
-            results.push(`❌ ${s.name} – tidak ditemukan`);
-          }
-        })
-      );
-      await new Promise((r) => setTimeout(r, 1000)); // jeda antiratelimit
+        /* 9. Web teknologi (Wappalyzer scrape) */
+        case "web":
+          const { data: wap } = await axios.get(
+            `https://www.wappalyzer.com/apps/`,
+            { headers: { "User-Agent": "Mozilla/5.0" } }
+          );
+          const tech = wap.match(
+            new RegExp(`data-testid=\"app-name\"[^>]*>(${target})<`, "i")
+          )
+            ? "✔ Teknologi dikenali oleh Wappalyzer"
+            : "❌ Teknologi tidak ditemukan.";
+          out = `🌐 ${target}\n${tech}`;
+          break;
+
+        /* 10. GitHub stats (REST publik) */
+        case "git":
+          const { data: g } = await axios.get(
+            `https://api.github.com/users/${encodeURIComponent(target)}`
+          );
+          out = g.message
+            ? "❌ User tidak ditemukan."
+            : `💻 GitHub : ${g.login}\nNama : ${g.name || "-"}\nBio : ${
+                g.bio || "-"
+              }\nFollower : ${g.followers}\nRepo : ${
+                g.public_repos
+              }\nLokasi : ${g.location || "-"}`;
+          break;
+
+        default:
+          out = "❌ Tipe tidak tersedia.";
+      }
+    } catch (e) {
+      out = `❌ Gagal / quota habis / target tidak valid.\nDetail: ${
+        e.message || e
+      }`;
     }
 
-    const header = `🔍 *Username Check : @${user}*\n${results.length} situs diperiksa\n\n`;
-    await connection.sendMessage(
-      jid,
-      { text: header + results.join("\n") },
-      { quoted: waitMsg }
-    );
+    await connection.sendMessage(jid, { text: out }, { quoted: wait });
   },
 
   // 2. KIRIM POLL/VOTING
