@@ -1,12 +1,13 @@
-/* Session Store – shared antara general.js & commandHandler.js */
-const ownerSession = new Set();          // owner yang sudah login
-const userLoginMap = new Map();          // token → userJid (1 token 1 user)
-const userSession = new Set();           // userJid yang sudah login
-const autoReplyPerUser = new Map();      // opsional: userJid → Map(keyword→answer)
+const ownerSession = new Set();
+const userLoginMap = new Map();
+const userSession = new Set();
+const autoReplyPerUser = new Map();
+const autoReplyDB = new Map(); 
 
 module.exports = {
   ownerSession,
   userLoginMap,
   userSession,
-  autoReplyPerUser
+  autoReplyPerUser,
+  autoReplyDB 
 };

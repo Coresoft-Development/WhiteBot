@@ -1,15 +1,6 @@
-/**
- * WhiteBot Command Handler  ✅ v1.3.7-fitur
- * - db SELALU masuk ke ctx
- * - bisa balas SEMUA pesan (broadcast pun)
- * - fallback error lengkap
- * - now includes: downloadMediaMessage helper
- */
 const commands = require("./commands");
 const ownerNumber = process.env.OWNER_NUMBER + "@s.whatsapp.net";
-const { realNumber } = require('./lib/numberHelper');
-
-// ⬇️ helper download media (foto/video)
+const { realNumber } = require("./lib/numberHelper");
 const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
 
 const {
@@ -17,8 +8,16 @@ const {
   userLoginMap,
   userSession,
   autoReplyPerUser,
+  autoReplyDB,
 } = require("./lib/sessionStore");
-const skipLogin = [".login", "login", ".ownerlogin", "ownerlogin", ".help", "help"];
+const skipLogin = [
+  ".login",
+  "login",
+  ".ownerlogin",
+  "ownerlogin",
+  ".help",
+  "help",
+];
 
 async function downloadMediaMessage(msg) {
   const type = Object.keys(msg.message)[0].replace("Message", "");
@@ -62,17 +61,35 @@ module.exports = async ({ connection, message, jid, text, fromMe, db }) => {
   /* LOGIN WAJIB – pakai nomor universal */
   const realSender = realNumber(jid, message.key.participant);
   const isLogin = userSession.has(realSender) || ownerSession.has(realSender);
-  console.log(`[DEBUG] realSender=${realSender}, isLogin=${isLogin}, cmd=${cmd}, skip=${skipLogin.includes(cmd)}`);
+  console.log(
+    `[DEBUG] realSender=${realSender}, isLogin=${isLogin}, cmd=${cmd}, skip=${skipLogin.includes(
+      cmd
+    )}`
+  );
   if (!skipLogin.includes(cmd) && !fromMe && !isLogin) {
-    return await connection.sendMessage(jid, { text: '❗ Kamu belum login!\nUser → .login <token>\nOwner → .ownerlogin' });
+    return await connection.sendMessage(jid, { text: "❗ Kamu belum login!" });
   }
 
   /* AUTO REPLY – pakai nomor universal */
   if (!fromMe && text) {
     const realJid = realNumber(jid, message.key.participant);
-    const map = autoReplyPerUser.get(realJid);
-    if (map && map.has(text.toLowerCase())) {
-      return await connection.sendMessage(jid, { text: map.get(text.toLowerCase()) }, { quoted: message });
+    const key = text.toLowerCase().trim();
+    const global = autoReplyDB.get(key);
+    const personal = autoReplyPerUser.get(realJid)?.get(key);
+
+    if (global) {
+      return await connection.sendMessage(
+        jid,
+        { text: global },
+        { quoted: message }
+      );
+    }
+    if (personal) {
+      return await connection.sendMessage(
+        jid,
+        { text: personal },
+        { quoted: message }
+      );
     }
   }
 
